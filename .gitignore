@@ -127,3 +127,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Project ignore
+.DS_Store
+data/*
+compiled_models/*
+.swp
+.vscode/*
