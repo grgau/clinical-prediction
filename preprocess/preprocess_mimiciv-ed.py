@@ -16,13 +16,24 @@ def get_ICDs_from_mimic_file(fileName, stayToMap):
     if (len(tokens[3]) == 0):  # ignore diagnoses where icd_code is null
       number_of_null_ICD_codes += 1
       continue;
+
+    # Remove alphanumeric characters
+    tokens[3] = tokens[3].replace('/','')
+    tokens[3] = tokens[3].replace('.', '')
+    tokens[3] = tokens[3].replace('+', '')
+    tokens[3] = tokens[3].replace('"', '')
+    
     ICD_code = tokens[3]
-    ICD_version = None
+    ICD_version = tokens[4]
+    filter_ICD_version = False
 
     if ARGS.icd_version != 'both':
-      ICD_version = tokens[4]
+      filter_ICD_version = True
 
-    if ICD_version == None or ICD_version == ARGS.icd_version: 
+    if filter_ICD_version == False or (filter_ICD_version == True and ICD_version == ARGS.icd_version): 
+      if ICD_version == "9":
+        ICD_code = ICD_code[:4] # Get only first 4 codes from ICD-9 (Check mimic-iii preprocessing script for more info)
+      
       if stay_id in stayToMap:
         stayToMap[stay_id].add(ICD_code)
       else:
