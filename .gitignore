@@ -130,7 +130,7 @@ dmypy.json
 
 # Project ignore
 .DS_Store
-data/*
+data/full-datasets/*
 compiled_models/*
 .swp
 .vscode/*
