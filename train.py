@@ -95,6 +95,14 @@ def performEvaluation(session, loss, x, y, mask, seqLen, test_Set):
       #At the end, it returns the mean cross entropy considering all the batches
   return n_batches, crossEntropySum / dataCount
 
+def decoderCell(inputs, lengths):
+  inputs = tf.transpose(inputs, [1,0,2])
+  attention_mechanism = tf.contrib.seq2seq.BahdanauMonotonicAttention(ARGS.attentionDimSize, memory=inputs, memory_sequence_length=lengths, normalize=True)
+  lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+  lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
+  dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
+  dec_cell = tf.contrib.seq2seq.AttentionWrapper(dec_cell, attention_mechanism)
+  return dec_cell
 
 def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
@@ -103,7 +111,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
     lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
     enc_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
-    _, encoder_states = tf.nn.dynamic_rnn(enc_cell, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
+    encoder_outputs, encoder_states = tf.nn.dynamic_rnn(enc_cell, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
 
   dec_start_state = tuple(encoder_states[-1] for _ in range(len(ARGS.hiddenDimSize)))
   seqLen = tf.cast(seqLen, dtype=tf.int32)
@@ -118,19 +126,25 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
   # Training Decoder
   with tf.variable_scope('decoder'):
-    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
-    dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
+    dec_cell = decoderCell(encoder_outputs, seqLen)
+    init_state = dec_cell.zero_state(tf.shape(targetTensor)[1], tf.float32)
+    init_state = init_state.clone(cell_state=dec_start_state)
 
     helper = tf.contrib.seq2seq.TrainingHelper(inputs=dec_input, sequence_length=seqLen, time_major=True)
-    decoder = tf.contrib.seq2seq.BasicDecoder(cell=dec_cell, helper=helper, initial_state=dec_start_state)
+    decoder = tf.contrib.seq2seq.BasicDecoder(cell=dec_cell, helper=helper, initial_state=init_state)
 
     _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
 
-  tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
+  # tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
+  # tiled_encoder_outputs = tf.contrib.seq2seq.tile_batch(encoder_outputs, multiplier=1)
+  # tiled_lengths = tf.contrib.seq2seq.tile_batch(seqLen, multiplier=1)
 
   # Testing Decoder (share weights with training decoder)
   with tf.variable_scope('decoder', reuse=True):
+    # dec_cell = decoderCell(encoder_outputs, seqLen)
+    # init_state = dec_cell.zero_state(tf.shape(targetTensor)[1], tf.float32)
+    # init_state = init_state.clone(cell_state=dec_start_state)
+
     go_token = tf.cast(go_token, dtype=tf.int32)
     end_token = tf.cast(end_token, dtype=tf.int32)
 
@@ -139,13 +153,13 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
       embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1], ARGS.numberOfInputCodes]), trainable=False),
       start_tokens=tf.fill([tf.shape(targetTensor)[1]], go_token),
       end_token=end_token,
-      initial_state=tiled_start_state,
+      initial_state=init_state,
       beam_width=1
     )
 
     _, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=1)
 
-  return training_state[-1].h, tf.transpose(inference_state.cell_state[-1].h, [1,0,2]) # Reshape inference_state to be time major
+  return training_state.cell_state[-1].c, tf.transpose(inference_state.cell_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
 
 
 def FC_layer(inputTensor):
@@ -277,6 +291,7 @@ def parse_arguments():
   parser.add_argument('outFile', metavar='out_file', default='model_output', help='Any file directory to store the model.')
   parser.add_argument('--maxConsecutiveNonImprovements', type=int, default=10, help='Training wiil run until reaching the maximum number of epochs without improvement before stopping the training')
   parser.add_argument('--hiddenDimSize', type=str, default='[271]', help='Number of layers and their size - for example [100,200] refers to two layers with 100 and 200 nodes.')
+  parser.add_argument('--attentionDimSize', type=int, default=10, help='Number of attention layer dense units')
   parser.add_argument('--batchSize', type=int, default=100, help='Batch size.')
   parser.add_argument('--nEpochs', type=int, default=1000, help='Number of training iterations.')
   parser.add_argument('--LregularizationAlpha', type=float, default=0.001, help='Alpha regularization for L2 normalization')
