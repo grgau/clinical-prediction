@@ -97,16 +97,29 @@ def performEvaluation(session, loss, x, y, mask, seqLen, test_Set):
 
 
 def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
+  seqLen = tf.cast(seqLen, dtype=tf.int32)
 
   # Encoder
   with tf.variable_scope('encoder'):
-    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
-    enc_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
-    _, encoder_states = tf.nn.dynamic_rnn(enc_cell, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
+    lstms_f = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+    lstms_b = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+    lstms_f = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1 - ARGS.dropoutRate)) for lstm in lstms_f]
+    lstms_b = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1 - ARGS.dropoutRate)) for lstm in lstms_b]
+    lstms_f = tf.nn.rnn_cell.MultiRNNCell(lstms_f)
+    lstms_b = tf.nn.rnn_cell.MultiRNNCell(lstms_b)
 
-  dec_start_state = tuple(encoder_states[-1] for _ in range(len(ARGS.hiddenDimSize)))
-  seqLen = tf.cast(seqLen, dtype=tf.int32)
+    (encoder_outputs_f, encoder_outputs_b), (encoder_states_f, encoder_states_b) = tf.nn.bidirectional_dynamic_rnn(cell_fw=lstms_f,
+                                                                                                       cell_bw=lstms_b,
+                                                                                                       inputs=inputTensor,
+                                                                                                       sequence_length=seqLen,
+                                                                                                       time_major=True,
+                                                                                                       dtype=tf.float32)
+
+  encoder_outputs = tf.concat([encoder_outputs_f, encoder_outputs_b], -1)
+  cell_state_final = tf.concat([encoder_states_f[-1].c, encoder_states_b[-1].c], -1)
+  hidden_state_final = tf.concat([encoder_states_f[-1].h, encoder_states_b[-1].h], -1)
+  dec_start_state = tf.nn.rnn_cell.LSTMStateTuple(c=cell_state_final, h=hidden_state_final)
+  dec_start_state = tuple(dec_start_state for _ in range(len(ARGS.hiddenDimSize)))
 
   go_token = 2.
   end_token = 3.
@@ -118,7 +131,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
   # Training Decoder
   with tf.variable_scope('decoder'):
-    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+    lstms = [tf.nn.rnn_cell.LSTMCell(2*size) for size in ARGS.hiddenDimSize]
     lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
     dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
@@ -136,7 +149,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     inference_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
       cell=dec_cell,
-      embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1], ARGS.numberOfInputCodes]), trainable=False),
+      embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1]*2, ARGS.numberOfInputCodes]), trainable=False),
       start_tokens=tf.fill([tf.shape(targetTensor)[1]], go_token),
       end_token=end_token,
       initial_state=tiled_start_state,
@@ -145,7 +158,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=1)
 
-  return training_state[-1].c, tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
+  return training_state[-1].h, tf.transpose(inference_state.cell_state[-1].h, [1,0,2]) # Reshape inference_state to be time major
 
 
 def FC_layer(inputTensor):
@@ -185,7 +198,8 @@ def build_model():
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
       optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06).minimize(L2_regularized_loss)
-
+      # optimizer = tf.train.RMSPropOptimizer(learning_rate=ARGS.learningRate, decay=0.95, momentum=0.0, epsilon=1e-06).minimize(L2_regularized_loss)
+      
       # Test loss
       cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
       test_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
