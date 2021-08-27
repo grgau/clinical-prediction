@@ -184,7 +184,10 @@ def build_model():
       train_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06).minimize(L2_regularized_loss)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06)#.minimize(L2_regularized_loss)
+      gvs = optimizer.compute_gradients(L2_regularized_loss)
+      capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
+      optimizer = optimizer.apply_gradients(capped_gvs)
 
       # Test loss
       cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
