@@ -145,7 +145,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=1)
 
-  return training_state[-1].c, tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
+  return training_state[-1].h, tf.transpose(inference_state.cell_state[-1].h, [1,0,2]) # Reshape inference_state to be time major
 
 
 def FC_layer(inputTensor):
