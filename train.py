@@ -145,7 +145,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=1)
 
-  return training_state[-1].h, tf.transpose(inference_state.cell_state[-1].h, [1,0,2]) # Reshape inference_state to be time major
+  return training_state[-1].c, tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
 
 
 def FC_layer(inputTensor):
@@ -159,7 +159,7 @@ def FC_layer(inputTensor):
                           shape=[ARGS.numberOfInputCodes],
                           dtype=tf.float32,
                           initializer=tf.zeros_initializer())
-  output = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(inputTensor, weights), bias)))
+  output = tf.nn.softmax(tf.nn.relu(tf.add(tf.matmul(inputTensor, weights), bias)))
   return output, weights, bias
 
 def build_model():
@@ -175,7 +175,7 @@ def build_model():
       flowingTensorTrain, weights, bias = FC_layer(flowingTensorInference)
       flowingTensorTrain = tf.math.multiply(flowingTensorTrain, mask[:,:,None])
 
-      flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
+      flowingTensorInference = tf.nn.softmax(tf.nn.relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
       flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
 
       # Train loss
