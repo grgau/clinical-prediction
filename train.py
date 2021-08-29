@@ -185,9 +185,9 @@ def build_model():
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
       optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06)#.minimize(L2_regularized_loss)
-      gvs = optimizer.compute_gradients(L2_regularized_loss)
-      capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
-      optimizer = optimizer.apply_gradients(capped_gvs)
+      gradients, variables = zip(*optimizer.compute_gradients(L2_regularized_loss))
+      gradients, _ = tf.clip_by_global_norm(gradients, ARGS.clippingValue)
+      optimizer = optimizer.apply_gradients(zip(gradients, variables))
 
       # Test loss
       cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
@@ -285,6 +285,7 @@ def parse_arguments():
   parser.add_argument('--LregularizationAlpha', type=float, default=0.001, help='Alpha regularization for L2 normalization')
   parser.add_argument('--learningRate', type=float, default=0.5, help='Learning rate.')
   parser.add_argument('--dropoutRate', type=float, default=0.45, help='Dropout probability.')
+  parser.add_argument('--clippingValue', type=float, default=5.0, help='Global norm value to gradient clipping.')
 
   ARGStemp = parser.parse_args()
   hiddenDimSize = [int(strDim) for strDim in ARGStemp.hiddenDimSize[1:-1].split(',')]
