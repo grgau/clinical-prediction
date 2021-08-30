@@ -198,7 +198,7 @@ def build_model():
       train_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
-      optimizer = tf.contrib.opt.LazyAdamOptimizer(learning_rate=ARGS.learningRate).minimize(L2_regularized_loss)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06).minimize(L2_regularized_loss)
 
       # Test loss
       cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
@@ -294,7 +294,7 @@ def parse_arguments():
   parser.add_argument('--batchSize', type=int, default=100, help='Batch size.')
   parser.add_argument('--nEpochs', type=int, default=1000, help='Number of training iterations.')
   parser.add_argument('--LregularizationAlpha', type=float, default=0.001, help='Alpha regularization for L2 normalization')
-  parser.add_argument('--learningRate', type=float, default=0.005, help='Learning rate.')
+  parser.add_argument('--learningRate', type=float, default=0.5, help='Learning rate.')
   parser.add_argument('--dropoutRate', type=float, default=0.45, help='Dropout probability.')
 
   ARGStemp = parser.parse_args()
