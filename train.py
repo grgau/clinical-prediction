@@ -136,14 +136,14 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
 
   tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
-  # tiled_encoder_outputs = tf.contrib.seq2seq.tile_batch(encoder_outputs, multiplier=1)
-  # tiled_lengths = tf.contrib.seq2seq.tile_batch(seqLen, multiplier=1)
+  tiled_encoder_outputs = tf.contrib.seq2seq.tile_batch(encoder_outputs, multiplier=1)
+  tiled_lengths = tf.contrib.seq2seq.tile_batch(seqLen, multiplier=1)
 
   # Testing Decoder (share weights with training decoder)
   with tf.variable_scope('decoder', reuse=True):
-    # dec_cell = decoderCell(encoder_outputs, seqLen)
-    # init_state = dec_cell.zero_state(tf.shape(targetTensor)[1], tf.float32)
-    # init_state = init_state.clone(cell_state=dec_start_state)
+    dec_cell = decoderCell(tiled_encoder_outputs, tiled_lengths)
+    init_state = dec_cell.zero_state(tf.shape(targetTensor)[1], tf.float32)
+    init_state = init_state.clone(cell_state=tiled_start_state)
 
     go_token = tf.cast(go_token, dtype=tf.int32)
     end_token = tf.cast(end_token, dtype=tf.int32)
@@ -153,7 +153,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
       embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1], ARGS.numberOfInputCodes]), trainable=False),
       start_tokens=tf.fill([tf.shape(targetTensor)[1]], go_token),
       end_token=end_token,
-      initial_state=tiled_start_state,
+      initial_state=init_state,
       beam_width=1
     )
 
