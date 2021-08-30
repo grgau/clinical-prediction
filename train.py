@@ -97,7 +97,7 @@ def performEvaluation(session, loss, x, y, mask, seqLen, test_Set):
 
 def decoderCell(inputs, lengths):
   inputs = tf.transpose(inputs, [1,0,2])
-  attention_mechanism = tf.contrib.seq2seq.BahdanauMonotonicAttention(ARGS.attentionDimSize, memory=inputs, memory_sequence_length=lengths, normalize=True)
+  attention_mechanism = tf.contrib.seq2seq.LuongAttention(ARGS.hiddenDimSize[-1], memory=inputs, memory_sequence_length=lengths)
   lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
   lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
   dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
@@ -198,10 +198,7 @@ def build_model():
       train_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06)#.minimize(L2_regularized_loss)
-      gvs = optimizer.compute_gradients(L2_regularized_loss)
-      capped_gvs = [(tf.clip_by_value(grad, -ARGS.clippingValue, ARGS.clippingValue), var) for grad, var in gvs]
-      optimizer = optimizer.apply_gradients(capped_gvs)
+      optimizer = tf.contrib.opt.LazyAdamOptimizer(learning_rate=ARGS.learningRate).minimize(L2_regularized_loss)
 
       # Test loss
       cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
@@ -294,13 +291,11 @@ def parse_arguments():
   parser.add_argument('outFile', metavar='out_file', default='model_output', help='Any file directory to store the model.')
   parser.add_argument('--maxConsecutiveNonImprovements', type=int, default=10, help='Training wiil run until reaching the maximum number of epochs without improvement before stopping the training')
   parser.add_argument('--hiddenDimSize', type=str, default='[271]', help='Number of layers and their size - for example [100,200] refers to two layers with 100 and 200 nodes.')
-  parser.add_argument('--attentionDimSize', type=int, default=10, help='Number of attention layer dense units')
   parser.add_argument('--batchSize', type=int, default=100, help='Batch size.')
   parser.add_argument('--nEpochs', type=int, default=1000, help='Number of training iterations.')
   parser.add_argument('--LregularizationAlpha', type=float, default=0.001, help='Alpha regularization for L2 normalization')
-  parser.add_argument('--learningRate', type=float, default=0.5, help='Learning rate.')
+  parser.add_argument('--learningRate', type=float, default=0.005, help='Learning rate.')
   parser.add_argument('--dropoutRate', type=float, default=0.45, help='Dropout probability.')
-  parser.add_argument('--clippingValue', type=float, default=0.5, help='Gradient clipping value.')
 
   ARGStemp = parser.parse_args()
   hiddenDimSize = [int(strDim) for strDim in ARGStemp.hiddenDimSize[1:-1].split(',')]
