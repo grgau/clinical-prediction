@@ -135,7 +135,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
 
-  # tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
+  tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
   # tiled_encoder_outputs = tf.contrib.seq2seq.tile_batch(encoder_outputs, multiplier=1)
   # tiled_lengths = tf.contrib.seq2seq.tile_batch(seqLen, multiplier=1)
 
@@ -153,7 +153,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
       embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1], ARGS.numberOfInputCodes]), trainable=False),
       start_tokens=tf.fill([tf.shape(targetTensor)[1]], go_token),
       end_token=end_token,
-      initial_state=init_state,
+      initial_state=tiled_start_state,
       beam_width=1
     )
 
@@ -173,7 +173,7 @@ def FC_layer(inputTensor):
                           shape=[ARGS.numberOfInputCodes],
                           dtype=tf.float32,
                           initializer=tf.zeros_initializer())
-  output = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(inputTensor, weights), bias)))
+  output = tf.nn.softmax(tf.nn.relu(tf.add(tf.matmul(inputTensor, weights), bias)))
   return output, weights, bias
 
 def build_model():
@@ -189,7 +189,7 @@ def build_model():
       flowingTensorTrain, weights, bias = FC_layer(flowingTensorInference)
       flowingTensorTrain = tf.math.multiply(flowingTensorTrain, mask[:,:,None])
 
-      flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
+      flowingTensorInference = tf.nn.softmax(tf.nn.relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
       flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
 
       # Train loss
@@ -198,7 +198,10 @@ def build_model():
       train_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06).minimize(L2_regularized_loss)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06)#.minimize(L2_regularized_loss)
+      gvs = optimizer.compute_gradients(L2_regularized_loss)
+      capped_gvs = [(tf.clip_by_value(grad, -ARGS.clippingValue, ARGS.clippingValue), var) for grad, var in gvs]
+      optimizer = optimizer.apply_gradients(capped_gvs)
 
       # Test loss
       cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
@@ -297,6 +300,7 @@ def parse_arguments():
   parser.add_argument('--LregularizationAlpha', type=float, default=0.001, help='Alpha regularization for L2 normalization')
   parser.add_argument('--learningRate', type=float, default=0.5, help='Learning rate.')
   parser.add_argument('--dropoutRate', type=float, default=0.45, help='Dropout probability.')
+  parser.add_argument('--clippingValue', type=float, default=0.5, help='Gradient clipping value.')
 
   ARGStemp = parser.parse_args()
   hiddenDimSize = [int(strDim) for strDim in ARGStemp.hiddenDimSize[1:-1].split(',')]
