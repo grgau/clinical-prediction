@@ -101,38 +101,33 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
   # Encoder
   with tf.variable_scope('encoder'):
-    lstms_f = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms_b = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms_f = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1 - ARGS.dropoutRate)) for lstm in lstms_f]
-    lstms_b = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1 - ARGS.dropoutRate)) for lstm in lstms_b]
-    lstms_f = tf.nn.rnn_cell.MultiRNNCell(lstms_f)
-    lstms_b = tf.nn.rnn_cell.MultiRNNCell(lstms_b)
+    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
+    lstms = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
-    (encoder_outputs_f, encoder_outputs_b), (encoder_states_f, encoder_states_b) = tf.nn.bidirectional_dynamic_rnn(cell_fw=lstms_f,
-                                                                                                       cell_bw=lstms_b,
-                                                                                                       inputs=inputTensor,
-                                                                                                       sequence_length=seqLen,
-                                                                                                       time_major=True,
-                                                                                                       dtype=tf.float32)
+    encoder_outputs_f, encoder_states_f = tf.nn.dynamic_rnn(lstms, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
+    reversedInputTensor = tf.reverse_sequence(input=inputTensor, seq_lengths=seqLen, seq_dim=0, batch_dim=1)
+    encoder_outputs_b, encoder_states_b = tf.nn.dynamic_rnn(lstms, reversedInputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
 
   encoder_outputs = tf.concat([encoder_outputs_f, encoder_outputs_b], -1)
   cell_state_final = tf.concat([encoder_states_f[-1].c, encoder_states_b[-1].c], -1)
   hidden_state_final = tf.concat([encoder_states_f[-1].h, encoder_states_b[-1].h], -1)
-  dec_start_state = tf.nn.rnn_cell.LSTMStateTuple(c=cell_state_final, h=hidden_state_final)
-  dec_start_state = tuple(dec_start_state for _ in range(len(ARGS.hiddenDimSize)))
-
-  go_token = 2.
-  end_token = 3.
-
-  go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
-  end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
-  dec_input = tf.concat([go_tokens, targetTensor], axis=0)
-  dec_input = tf.concat([dec_input, end_tokens], axis=0)
 
   # Training Decoder
   with tf.variable_scope('decoder'):
+    dec_start_state = tf.nn.rnn_cell.LSTMStateTuple(c=cell_state_final, h=hidden_state_final)
+    dec_start_state = tuple(dec_start_state for _ in range(len(ARGS.hiddenDimSize)))
+
+    go_token = 2.
+    end_token = 3.
+
+    go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
+    end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
+    dec_input = tf.concat([go_tokens, targetTensor], axis=0)
+    dec_input = tf.concat([dec_input, end_tokens], axis=1)
+
     lstms = [tf.nn.rnn_cell.LSTMCell(2*size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
+    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
     dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
     helper = tf.contrib.seq2seq.TrainingHelper(inputs=dec_input, sequence_length=seqLen, time_major=True)
@@ -140,10 +135,11 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
 
-  tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
 
   # Testing Decoder (share weights with training decoder)
   with tf.variable_scope('decoder', reuse=True):
+    tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
+
     go_token = tf.cast(go_token, dtype=tf.int32)
     end_token = tf.cast(end_token, dtype=tf.int32)
 
