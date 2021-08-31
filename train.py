@@ -124,7 +124,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
     end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
     dec_input = tf.concat([go_tokens, targetTensor], axis=0)
-    dec_input = tf.concat([dec_input, end_tokens], axis=1)
+    dec_input = tf.concat([dec_input, end_tokens], axis=0)
 
     lstms = [tf.nn.rnn_cell.LSTMCell(2*size) for size in ARGS.hiddenDimSize]
     lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
