@@ -97,11 +97,11 @@ def performEvaluation(session, loss, x, y, mask, seqLen, test_Set):
 
 def decoderCell(inputs, lengths):
   inputs = tf.transpose(inputs, [1,0,2])
-  attention_mechanism = tf.contrib.seq2seq.LuongAttention(ARGS.hiddenDimSize[-1], memory=inputs, memory_sequence_length=lengths)
+  attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(ARGS.attentionDimSize, memory=inputs, memory_sequence_length=lengths)
   lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-  lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
+  lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
   dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
-  dec_cell = tf.contrib.seq2seq.AttentionWrapper(dec_cell, attention_mechanism)
+  dec_cell = tf.contrib.seq2seq.AttentionWrapper(dec_cell, attention_mechanism, output_attention=False)
   return dec_cell
 
 def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
@@ -109,23 +109,23 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
   # Encoder
   with tf.variable_scope('encoder'):
     lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
+    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
     enc_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
     encoder_outputs, encoder_states = tf.nn.dynamic_rnn(enc_cell, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
 
-  dec_start_state = tuple(encoder_states[-1] for _ in range(len(ARGS.hiddenDimSize)))
-  seqLen = tf.cast(seqLen, dtype=tf.int32)
-
-  go_token = 2.
-  end_token = 3.
-
-  go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
-  end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
-  dec_input = tf.concat([go_tokens, targetTensor], axis=0)
-  dec_input = tf.concat([dec_input, end_tokens], axis=0)
-
   # Training Decoder
   with tf.variable_scope('decoder'):
+    dec_start_state = tuple(encoder_states[-1] for _ in range(len(ARGS.hiddenDimSize)))
+    seqLen = tf.cast(seqLen, dtype=tf.int32)
+
+    go_token = 2.
+    end_token = 3.
+
+    go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
+    end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
+    dec_input = tf.concat([go_tokens, targetTensor], axis=0)
+    dec_input = tf.concat([dec_input, end_tokens], axis=1)
+
     dec_cell = decoderCell(encoder_outputs, seqLen)
     init_state = dec_cell.zero_state(tf.shape(targetTensor)[1], tf.float32)
     init_state = init_state.clone(cell_state=dec_start_state)
@@ -135,14 +135,13 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
 
-  tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
-  tiled_encoder_outputs = tf.contrib.seq2seq.tile_batch(encoder_outputs, multiplier=1)
-  tiled_lengths = tf.contrib.seq2seq.tile_batch(seqLen, multiplier=1)
+    tiled_start_state = tf.contrib.seq2seq.tile_batch(dec_start_state, multiplier=1)
+    tiled_encoder_outputs = tf.contrib.seq2seq.tile_batch(encoder_outputs, multiplier=1)
+    tiled_lengths = tf.contrib.seq2seq.tile_batch(seqLen, multiplier=1)
 
   # Testing Decoder (share weights with training decoder)
   with tf.variable_scope('decoder', reuse=True):
     dec_cell = decoderCell(tiled_encoder_outputs, tiled_lengths)
-    init_state = dec_cell.zero_state(tf.shape(targetTensor)[1], tf.float32)
     init_state = init_state.clone(cell_state=tiled_start_state)
 
     go_token = tf.cast(go_token, dtype=tf.int32)
@@ -173,7 +172,7 @@ def FC_layer(inputTensor):
                           shape=[ARGS.numberOfInputCodes],
                           dtype=tf.float32,
                           initializer=tf.zeros_initializer())
-  output = tf.nn.softmax(tf.nn.relu(tf.add(tf.matmul(inputTensor, weights), bias)))
+  output = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(inputTensor, weights), bias)))
   return output, weights, bias
 
 def build_model():
@@ -189,7 +188,7 @@ def build_model():
       flowingTensorTrain, weights, bias = FC_layer(flowingTensorInference)
       flowingTensorTrain = tf.math.multiply(flowingTensorTrain, mask[:,:,None])
 
-      flowingTensorInference = tf.nn.softmax(tf.nn.relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
+      flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
       flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
 
       # Train loss
@@ -290,6 +289,7 @@ def parse_arguments():
   parser.add_argument('inputFileRadical', type=str, metavar='<visit_file>', help='File radical name (the software will look for .train and .test files) with pickled data organized as patient x admission x codes.')
   parser.add_argument('outFile', metavar='out_file', default='model_output', help='Any file directory to store the model.')
   parser.add_argument('--maxConsecutiveNonImprovements', type=int, default=10, help='Training wiil run until reaching the maximum number of epochs without improvement before stopping the training')
+  parser.add_argument('--attentionDimSize', type=int, default=15, help='Number of attention units.')
   parser.add_argument('--hiddenDimSize', type=str, default='[271]', help='Number of layers and their size - for example [100,200] refers to two layers with 100 and 200 nodes.')
   parser.add_argument('--batchSize', type=int, default=100, help='Batch size.')
   parser.add_argument('--nEpochs', type=int, default=1000, help='Number of training iterations.')
