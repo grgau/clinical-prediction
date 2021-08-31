@@ -109,9 +109,9 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     reversedInputTensor = tf.reverse_sequence(input=inputTensor, seq_lengths=seqLen, seq_dim=0, batch_dim=1)
     encoder_outputs_b, encoder_states_b = tf.nn.dynamic_rnn(lstms, reversedInputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
 
-  encoder_outputs = tf.concat([encoder_outputs_f, encoder_outputs_b], -1)
-  cell_state_final = tf.concat([encoder_states_f[-1].c, encoder_states_b[-1].c], -1)
-  hidden_state_final = tf.concat([encoder_states_f[-1].h, encoder_states_b[-1].h], -1)
+    # encoder_outputs = tf.concat([encoder_outputs_f, encoder_outputs_b], -1)
+    cell_state_final = tf.concat([encoder_states_f[-1].c, encoder_states_b[-1].c], -1)
+    hidden_state_final = tf.concat([encoder_states_f[-1].h, encoder_states_b[-1].h], -1)
 
   # Training Decoder
   with tf.variable_scope('decoder'):
@@ -121,16 +121,16 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     go_token = 2.
     end_token = 3.
 
-    go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
-    end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
-    dec_input = tf.concat([go_tokens, targetTensor], axis=0)
-    dec_input = tf.concat([dec_input, end_tokens], axis=0)
+    # go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
+    # end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
+    # dec_input = tf.concat([go_tokens, targetTensor], axis=0)
+    # dec_input = tf.concat([dec_input, end_tokens], axis=0)
 
     lstms = [tf.nn.rnn_cell.LSTMCell(2*size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
+    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
     dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
-    helper = tf.contrib.seq2seq.TrainingHelper(inputs=dec_input, sequence_length=seqLen, time_major=True)
+    helper = tf.contrib.seq2seq.TrainingHelper(inputs=targetTensor, sequence_length=seqLen, time_major=True)
     decoder = tf.contrib.seq2seq.BasicDecoder(cell=dec_cell, helper=helper, initial_state=dec_start_state)
 
     _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
@@ -154,7 +154,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     _, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=1)
 
-  return training_state[-1].c, tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
+  return tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
 
 
 def FC_layer(inputTensor):
@@ -180,16 +180,16 @@ def build_model():
     seqLen = tf.placeholder(tf.float32, [None], name="nVisitsOfEachPatient_List")
 
     with tf.device('/gpu:0'):
-      flowingTensorTrain, flowingTensorInference = EncoderDecoder_layer(x, y, seqLen)
-      flowingTensorTrain, weights, bias = FC_layer(flowingTensorTrain)
-      flowingTensorTrain = tf.math.multiply(flowingTensorTrain, mask[:,:,None])
+      flowingTensor = EncoderDecoder_layer(x, y, seqLen)
+      flowingTensor, weights, bias = FC_layer(flowingTensor)
+      flowingTensor = tf.math.multiply(flowingTensor, mask[:,:,None])
 
-      flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
-      flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
+      # flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
+      # flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
 
       # Train loss
       epislon = 1e-8
-      cross_entropy = -(y * tf.log(flowingTensorTrain + epislon) + (1. - y) * tf.log(1. - flowingTensorTrain + epislon))
+      cross_entropy = -(y * tf.log(flowingTensor + epislon) + (1. - y) * tf.log(1. - flowingTensor + epislon))
       train_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
       L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
@@ -197,11 +197,11 @@ def build_model():
       # optimizer = tf.train.RMSPropOptimizer(learning_rate=ARGS.learningRate, decay=0.95, momentum=0.0, epsilon=1e-06).minimize(L2_regularized_loss)
       
       # Test loss
-      cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
-      test_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
-      L2_regularized_loss_test = test_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
+      # cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
+      # test_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
+      # L2_regularized_loss_test = test_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
-    return tf.global_variables_initializer(), graph, optimizer, L2_regularized_loss, L2_regularized_loss_test, x, y, mask, seqLen, flowingTensorInference
+    return tf.global_variables_initializer(), graph, optimizer, L2_regularized_loss, x, y, mask, seqLen, flowingTensor
 
 
 def train_model():
@@ -209,7 +209,7 @@ def train_model():
   trainSet, testSet = load_data()
 
   print("==> model building")
-  init, graph, optimizer, loss_train, loss_test, x, y, mask, seqLen, predictions = build_model()
+  init, graph, optimizer, loss, x, y, mask, seqLen, predictions = build_model()
 
   print ("==> training and validation")
   batchSize = ARGS.batchSize
@@ -236,13 +236,13 @@ def train_model():
         x_hot += np.random.normal(0, 0.1, x_hot.shape)
 
         feed_dict = {x: x_hot, y: y_hot, mask: mask_hot, seqLen: nVisitsOfEachPatient_List}
-        _, trainCrossEntropy = sess.run([optimizer, loss_train], feed_dict=feed_dict)
+        _, trainCrossEntropy = sess.run([optimizer, loss], feed_dict=feed_dict)
 
         trainCrossEntropyVector.append(trainCrossEntropy)
         iteration += 1
 
       print('-> Epoch: %d, mean cross entropy considering %d TRAINING batches: %f' % (epoch_counter, n_batches, np.mean(trainCrossEntropyVector)))
-      nValidBatches, validationCrossEntropy = performEvaluation(sess, loss_test, x, y, mask, seqLen, testSet)
+      nValidBatches, validationCrossEntropy = performEvaluation(sess, loss, x, y, mask, seqLen, testSet)
       print('      mean cross entropy considering %d VALIDATION batches: %f' % (nValidBatches, validationCrossEntropy))
 
       if validationCrossEntropy < bestValidationCrossEntropy:
