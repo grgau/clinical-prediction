@@ -181,7 +181,7 @@ def build_model():
 
     with tf.device('/gpu:0'):
       flowingTensorTrain, flowingTensorInference = EncoderDecoder_layer(x, y, seqLen)
-      flowingTensorTrain, weights, bias = FC_layer(flowingTensorInference)
+      flowingTensorTrain, weights, bias = FC_layer(flowingTensorTrain)
       flowingTensorTrain = tf.math.multiply(flowingTensorTrain, mask[:,:,None])
 
       flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
