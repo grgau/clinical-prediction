@@ -9,6 +9,8 @@ import numpy as np
 import tensorflow as tf
 from sklearn import metrics
 
+from masked_lstm_cell import MaskedLSTMCell
+
 tf.get_logger().setLevel('ERROR')
 
 global ARGS
@@ -100,7 +102,8 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
   # Encoder
   with tf.variable_scope('encoder'):
-    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+    lstms = [MaskedLSTMCell(size, dtype=tf.float32, state_is_tuple=True) for size in [ARGS.hiddenDimSize]]
+    # lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
     lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
     enc_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
     _, encoder_states = tf.nn.dynamic_rnn(enc_cell, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
@@ -118,7 +121,8 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     # dec_input = tf.concat([go_tokens, targetTensor], axis=0)
     dec_input = tf.concat([targetTensor, end_tokens], axis=0)
 
-    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
+    lstms = [MaskedLSTMCell(size, dtype=tf.float32, state_is_tuple=True) for size in [ARGS.hiddenDimSize]]
+    # lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
     lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
     dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
