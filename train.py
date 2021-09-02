@@ -68,6 +68,8 @@ def load_data():
   main_testSet = [main_testSet[i] for i in test_sorted_index]
   labels_testSet = [labels_testSet[i] for i in test_sorted_index]
 
+  # maxLen = max([len(i) for i in main_trainSet])
+
   trainSet = [main_trainSet, labels_trainSet]
   testSet = [main_testSet, labels_testSet]
 
@@ -101,7 +103,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
   # Encoder
   with tf.variable_scope('encoder'):
     lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
+    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
     enc_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
     _, encoder_states = tf.nn.dynamic_rnn(enc_cell, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
 
@@ -113,19 +115,19 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     go_token = 2.
     end_token = 3.
 
-    # go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
+    go_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), go_token)
     end_tokens = tf.fill((1, tf.shape(targetTensor)[1], ARGS.numberOfInputCodes), end_token)
-    # dec_input = tf.concat([go_tokens, targetTensor], axis=0)
+    dec_input = tf.concat([go_tokens, targetTensor], axis=0)
     dec_input = tf.concat([targetTensor, end_tokens], axis=0)
 
     lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
-    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, state_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
+    lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1-ARGS.dropoutRate)) for lstm in lstms]
     dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
     helper = tf.contrib.seq2seq.TrainingHelper(inputs=dec_input, sequence_length=seqLen, time_major=True)
     decoder = tf.contrib.seq2seq.BasicDecoder(cell=dec_cell, helper=helper, initial_state=dec_start_state)
 
-    _, training_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
+    training_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder=decoder, output_time_major=True)
 
 
   # Testing Decoder (share weights with training decoder)
@@ -138,15 +140,18 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     inference_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
       cell=dec_cell,
       embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1], ARGS.numberOfInputCodes]), trainable=False),
-      start_tokens=tf.fill([tf.shape(targetTensor)[1]], go_token),
+      start_tokens=tf.fill([tf.shape(inputTensor)[1]], go_token),
       end_token=end_token,
       initial_state=tiled_start_state,
       beam_width=1
     )
 
-    _, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=1)
+    inference_outputs, inference_state, _ = tf.contrib.seq2seq.dynamic_decode(decoder=inference_decoder, output_time_major=True, maximum_iterations=tf.round(tf.reduce_max(seqLen)))
+    inference_outputs = tf.cast(inference_outputs.predicted_ids, dtype=tf.float32)
+    # inference_outputs = tf.transpose(inference_outputs, [1,0,2])
 
-  return tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
+  return training_outputs.rnn_output, inference_outputs
+  # return tf.transpose(inference_state.cell_state[-1].c, [1,0,2]) # Reshape inference_state to be time major
 
 
 def FC_layer(inputTensor):
@@ -172,21 +177,28 @@ def build_model():
     seqLen = tf.placeholder(tf.float32, [None], name="nVisitsOfEachPatient_List")
 
     with tf.device('/gpu:0'):
-      flowingTensor = EncoderDecoder_layer(x, y, seqLen)
-      flowingTensor, weights, bias = FC_layer(flowingTensor)
-      flowingTensor = tf.math.multiply(flowingTensor, mask[:,:,None], name="predictions")
+      flowingTensorTrain, flowingTensorInference = EncoderDecoder_layer(x, y, seqLen)
+      flowingTensorInference, weights, bias = FC_layer(flowingTensorInference)
+      flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
 
       epislon = 1e-8
-      cross_entropy = -(y * tf.log(flowingTensor + epislon) + (1. - y) * tf.log(1. - flowingTensor + epislon))
+      cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
       train_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
-      L2_regularized_loss = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
+      L2_regularized_loss_train = train_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
 
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06)#.minimize(L2_regularized_loss)
-      gvs = optimizer.compute_gradients(L2_regularized_loss)
-      capped_gvs = [(tf.clip_by_value(grad, -ARGS.clippingValue, ARGS.clippingValue), var) for grad, var in gvs]
-      optimizer = optimizer.apply_gradients(capped_gvs)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=ARGS.learningRate, rho=0.95, epsilon=1e-06).minimize(L2_regularized_loss_train)
+      # gvs = optimizer.compute_gradients(L2_regularized_loss_train)
+      # capped_gvs = [(tf.clip_by_value(grad, -ARGS.clippingValue, ARGS.clippingValue), var) for grad, var in gvs]
+      # optimizer = optimizer.apply_gradients(capped_gvs)
 
-    return tf.global_variables_initializer(), graph, optimizer, L2_regularized_loss, x, y, mask, seqLen, flowingTensor
+      # flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias)))
+      # flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
+
+      # cross_entropy = -(y * tf.log(flowingTensorInference + epislon) + (1. - y) * tf.log(1. - flowingTensorInference + epislon))
+      # test_loss = tf.math.reduce_mean(tf.math.reduce_sum(cross_entropy, axis=[2, 0]) / seqLen)
+      # L2_regularized_loss_test = test_loss + tf.math.reduce_sum(ARGS.LregularizationAlpha * (weights ** 2))
+
+    return tf.global_variables_initializer(), graph, optimizer, L2_regularized_loss_train, L2_regularized_loss_train, x, y, mask, seqLen, flowingTensorInference
 
 
 def train_model():
@@ -194,7 +206,7 @@ def train_model():
   trainSet, testSet = load_data()
 
   print("==> model building")
-  init, graph, optimizer, loss, x, y, mask, seqLen, predictions = build_model()
+  init, graph, optimizer, loss_train, loss_test, x, y, mask, seqLen, predictions = build_model()
 
   print ("==> training and validation")
   batchSize = ARGS.batchSize
@@ -221,13 +233,13 @@ def train_model():
         x_hot += np.random.normal(0, 0.1, x_hot.shape)
 
         feed_dict = {x: x_hot, y: y_hot, mask: mask_hot, seqLen: nVisitsOfEachPatient_List}
-        _, trainCrossEntropy = sess.run([optimizer, loss], feed_dict=feed_dict)
+        _, trainCrossEntropy = sess.run([optimizer, loss_train], feed_dict=feed_dict)
 
         trainCrossEntropyVector.append(trainCrossEntropy)
         iteration += 1
 
       print('-> Epoch: %d, mean cross entropy considering %d TRAINING batches: %f' % (epoch_counter, n_batches, np.mean(trainCrossEntropyVector)))
-      nValidBatches, validationCrossEntropy = performEvaluation(sess, loss, x, y, mask, seqLen, testSet)
+      nValidBatches, validationCrossEntropy = performEvaluation(sess, loss_test, x, y, mask, seqLen, testSet)
       print('      mean cross entropy considering %d VALIDATION batches: %f' % (nValidBatches, validationCrossEntropy))
 
       if validationCrossEntropy < bestValidationCrossEntropy:
