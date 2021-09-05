@@ -108,10 +108,13 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     encoder_outputs_f, encoder_states_f = tf.nn.dynamic_rnn(lstms, inputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
     reversedInputTensor = tf.reverse_sequence(input=inputTensor, seq_lengths=seqLen, seq_dim=0, batch_dim=1)
     encoder_outputs_b, encoder_states_b = tf.nn.dynamic_rnn(lstms, reversedInputTensor, sequence_length=seqLen, time_major=True, dtype=tf.float32)
+    encoder_outputs_b = tf.reverse_sequence(input=encoder_outputs_b, seq_lengths=seqLen, seq_dim=0, batch_dim=1)
 
-    # encoder_outputs = tf.concat([encoder_outputs_f, encoder_outputs_b], -1)
-    cell_state_final = tf.concat([encoder_states_f[-1].c, encoder_states_b[-1].c], -1)
-    hidden_state_final = tf.concat([encoder_states_f[-1].h, encoder_states_b[-1].h], -1)
+    encoder_outputs = tf.concat([encoder_outputs_f, encoder_outputs_b], -1)
+    # cell_state_final = tf.concat([encoder_states_f[-1].c, encoder_states_b[-1].c], -1)
+    # hidden_state_final = tf.concat([encoder_states_f[-1].h, encoder_states_b[-1].h], -1)
+    cell_state_final = tf.nn.relu(tf.multiply(encoder_states_f[-1].c, encoder_states_b[-1].c))
+    hidden_state_final = tf.nn.relu(tf.multiply(encoder_states_f[-1].h, encoder_states_b[-1].h))
 
   # Training Decoder
   with tf.variable_scope('decoder'):
@@ -126,7 +129,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
     # dec_input = tf.concat([go_tokens, targetTensor], axis=0)
     # dec_input = tf.concat([dec_input, end_tokens], axis=0)
 
-    lstms = [tf.nn.rnn_cell.LSTMCell(2*size) for size in ARGS.hiddenDimSize]
+    lstms = [tf.nn.rnn_cell.LSTMCell(size) for size in ARGS.hiddenDimSize]
     lstms = [tf.nn.rnn_cell.DropoutWrapper(lstm, output_keep_prob=(1.-ARGS.dropoutRate)) for lstm in lstms]
     dec_cell = tf.nn.rnn_cell.MultiRNNCell(lstms)
 
@@ -145,7 +148,7 @@ def EncoderDecoder_layer(inputTensor, targetTensor, seqLen):
 
     inference_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
       cell=dec_cell,
-      embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1]*2, ARGS.numberOfInputCodes]), trainable=False),
+      embedding=tf.Variable(tf.zeros([ARGS.hiddenDimSize[-1], ARGS.numberOfInputCodes]), trainable=False),
       start_tokens=tf.fill([tf.shape(targetTensor)[1]], go_token),
       end_token=end_token,
       initial_state=tiled_start_state,
@@ -182,7 +185,7 @@ def build_model():
     with tf.device('/gpu:0'):
       flowingTensor = EncoderDecoder_layer(x, y, seqLen)
       flowingTensor, weights, bias = FC_layer(flowingTensor)
-      flowingTensor = tf.math.multiply(flowingTensor, mask[:,:,None])
+      flowingTensor = tf.math.multiply(flowingTensor, mask[:,:,None], name="predictions")
 
       # flowingTensorInference = tf.nn.softmax(tf.nn.leaky_relu(tf.add(tf.matmul(flowingTensorInference, weights), bias))) # Apply the same output layer to inferenceTensor
       # flowingTensorInference = tf.math.multiply(flowingTensorInference, mask[:,:,None], name="predictions")
